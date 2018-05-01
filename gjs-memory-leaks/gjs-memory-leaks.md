@@ -84,8 +84,7 @@ function connectTest(button) {
         let myVariable = button;
     });
 }
- 
-let button = new Gtk.Button({ label: 'Button' });
+
 connectTest(button);
 ```
 
