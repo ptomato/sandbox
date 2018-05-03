@@ -9,8 +9,8 @@ This a brief overview of the structure of SpiderMonkey garbage collector heaps
 with some additional notes on GJS particulars. This isn't an exhaustive article
 on garbage collection or SpiderMonkey internals, only a reasonably thorough
 description of what a heap file looks like and how that relates to JavaScript
-and GJS. There is a fairly thorough, and presumably up to date, description of
-how the SpiderMonkey garbage collector works in [gc/GC.cpp][gc-cpp].
+and GJS. There is a fairly thorough description of how the SpiderMonkey garbage
+collector works in the comments of [GC.cpp][gc-cpp].
 
 ## The Roots Section
 
@@ -33,10 +33,10 @@ WeakMapEntry map=0x7f02844930c0 key=0x7f0284066c10 keyDelegate=(nil) value=0x7f0
 The roots portion always starts with the string `# Roots.` and each root entry
 is made of three parts.
 
-The first is the JavaScript engine's **address**. If you were to coerce a
-GObject to its string description you could see that it carries two addresses;
-one **jsobj address** and one **native address**. There won't be any GObjects in
-the roots section, but this will be important later when we examine a **node**.
+The first is the JavaScript engine's address. If you were to coerce a GObject to
+its string description you could see that it carries two addresses; one
+**jsobj address** and one **native address**. There won't be any GObjects in the
+roots section, but this will be important later when we examine a **node**.
 
 ```js
 gjs> const Gtk = imports.gi.Gtk;
@@ -55,7 +55,7 @@ could only appear if you were to dump a heap during a garbage collection cycle
 between the *mark* and *sweep* phases. If you are dumping a heap using the
 `dumpHeap()` function from GJS's System module, you will never see a *gray* root
 since JavaScript execution is paused during a collection cycle. You may see them
-if you are dumping a heap by sending a `SIGUSR1` to a GJS process with the env
+if you are dumping a heap by sending `SIGUSR1` to a GJS process with the env
 variable `GJS_DEBUG_HEAP_OUTPUT` set, but they will still be very rare.
 
 The third part is the **label**. Root labels are generally types of objects like
@@ -101,26 +101,27 @@ the heap and for the garbage collector to operate in. In other words, a garbage
 collection cycle can't cross a **zone** and neither will a **compartment**, an
 **arena** or a **cell**.
 
-A **compartment** contains can function as security boundary, although there are
-some facilities in the SpiderMonkey API to allow objects to cross compartent
-boundaries.
+A **compartment** acts as the parent for an **arena** and can function as
+security boundary, although there are some facilities in the SpiderMonkey API to
+allow objects to cross compartment boundaries.
 
-An **arena** is an internal unit of memory allocation (4096 bytes) and will only
-contain objects of the same size and kind as indicated by the `allockind` field.
-The `size` field seems to be present to make processing easier, as the type and
-size are linked and both defined in [AllocKind.h][allockind-h].
+An **arena** is an internal unit of memory allocation (4096 bytes) and can only
+contain a **cell** of the same size and kind as indicated by the `allockind`
+field. The `size` field seems to be present to make processing easier, as the
+type and size are linked and both defined in [AllocKind.h][allockind-h].
 
 A **cell** is the unit of memory that is allocated and collected by the garbage
-collector, and is the base class for all object classes (such as JSObject). Each
+collector, and the base class for all object classes (such as JSObject). Each
 **node** entry represents an object that is a type of **cell** (an `allockind`).
 
 ### Nodes & Edges
 
 While a **node** represents an object (such as an Array, Function or GObject),
 each **edge** entry represents a reference the **node** holds to another object,
-thus rooting it. If the object a **node** represent were collected and it was
+thus rooting it. If the object a **node** represents were collected and it was
 the only reference holder to an object in it's **edge** list, that object would
-then be marked *white* (collectable) during the next collection cycle.
+be marked *white* (collectable) in the *mark* phase and collected in the *sweep*
+phase of the next collection cycle.
 
 ```
 0x7f028449eca0 B GObject_Object 0x556629ed55f0
