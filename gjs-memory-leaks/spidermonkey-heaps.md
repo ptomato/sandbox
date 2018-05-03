@@ -42,16 +42,19 @@ gjs> new Gtk.Label();
 ```
 
 The second part is the root **color**, which could in principle be black (`B`),
-gray (`G`) or white (`W`). In practice all entries in the roots section will be
-black, and gray roots could only appear if you were to dump a heap during a
-garbage collection cycle between the *mark* and *sweep* phases. If you are
-dumping a heap using the `dumpHeap()` function from GJS's System module, you
-will never see gray roots since JavaScript execution is paused during a
-collection cycle. If you are dumping a heap by sending a `SIGUSR1` to a process
-with the env variable `GJS_DEBUG_HEAP_OUTPUT` set, you may see gray roots, but
-they will still be very rare.
+gray (`G`) or white (`W`). This known as [Tri-color marking][tricolor], with
+*black* being reachable and thus not collectable, *gray* yet to be scanned for
+references to collectable roots and *white* able to be collected.
 
-The third part is the root label. Root labels are generally types of objects
+In practice all entries in the roots section will be *black*, and *gray* roots
+could only appear if you were to dump a heap during a garbage collection cycle
+between the *mark* and *sweep* phases. If you are dumping a heap using the
+`dumpHeap()` function from GJS's System module, you will never see *gray* roots
+since JavaScript execution is paused during a collection cycle. You may see them
+if you are dumping a heap by sending a `SIGUSR1` to a GJS process with the env
+variable `GJS_DEBUG_HEAP_OUTPUT` set, but they will still be very rare.
+
+The third part is the root **label**. Root labels are generally types of objects
 like `script`, `persistent-Object`, `env chain`, `fp argv[0]` and so on. Each
 **node** and **edge** will also have a label and are usually more descriptive,
 such as a Function name.
@@ -114,7 +117,8 @@ type of **cell** (an `allockind`) that can only be allocated in an **arena**
 specified to hold that type of `allockind`, however a **node** can be in more
 than one **arena**.
 
-Some **node** types contain actual data, like strings or numbers
+Some **node** types contain actual data, like strings or numbers, but usually
+they're ad
 
 ```
 0x7f028449eca0 B GObject_Object 0x556629ed55f0
@@ -130,29 +134,14 @@ Some **node** types contain actual data, like strings or numbers
 > 0x7f02840a5610 B query_info
 ```
 
-The first line in the snippet above is the node, which in this case is a
-GObject.
-
-Like a root, a node has three parts; an address, a color and a label.
-Unfortunately, the GType is not part of the label but the native address is
-which makes it possible to inspect via `gdb`.
-
-> The following gdb snippet was not actually performed on this object
-
-> Printing out the `ObjectInstance` for an address
+The first line in the snippet above is the node, which in this case is an
+instance of a `Gio.File`. Like a **root** entry, a **node** entry has three
+parts; an address, a color and a label. Unfortunately, the GType is not part of
+the label but the **native address** is making it possible to inspect via `gdb`:
 
 ```sh
-(gdb) print *((ObjectInstance*)0x5590ae10f560)
-$1 = {info = 0x5590ae416140, gobj = 0x0, keep_alive = {m_rooted = false, m_has_weakref = false, m_cx = 0x0, m_heap = {<js::HeapBase<JSObject*>> = {<No data fields>}, ptr = 0x0},
-    m_root = 0x0, m_notify = 0x0, m_data = 0x0}, gtype = 94079882365632, signals = std::set with 0 elements, klass = 0x5590addad800, vfuncs = std::deque with 0 elements,
-  js_object_finalized = 0}
-```
-
-> Calling `g_type_name()` on the gtype member of the ObjectInstance
-
-```sh
-(gdb) call g_type_name(((ObjectInstance*)0x5590ae10f560)->gtype)
-$2 = (const gchar *) 0x7ff7850bed68 "GtkLabel"
+(gdb) call g_type_name(((ObjectInstance*)0x556629ed55f0)->gtype)
+$1 = (const gchar *) 0x7ff7850bed68 "GLocalFile"
 ```
 
 Following the **node** entry are the edges for this node. Again, each has three
@@ -166,9 +155,11 @@ example, `> 0x7f0284094be0 B get_child` we would find it points to a `Function`
 
 * [MDN: *GC and CC logs*](https://developer.mozilla.org/docs/Mozilla/Performance/GC_and_CC_logs)
 * [MDN: *Garbage collection*](https://developer.mozilla.org/docs/Mozilla/Projects/SpiderMonkey/Internals/Garbage_collection)
+* [MDN: *Memory Management*](https://developer.mozilla.org/docs/Web/JavaScript/Memory_Management)
 * [Mozilla JavaScript Blog: *Incremental GC in Firefox 16!*](https://blog.mozilla.org/javascript/2012/08/28/incremental-gc-in-firefox-16/)
 * [Mozilla Hacks: *Generational Garbage Collection in Firefox*](https://hacks.mozilla.org/2014/09/generational-garbage-collection-in-firefox/)
 * [Mozilla Hack: *Compacting Garbage Collection in SpiderMonkey*](https://hacks.mozilla.org/2015/07/compacting-garbage-collection-in-spidermonkey/)
 
 [allockind]: https://dxr.mozilla.org/mozilla-central/source/js/src/gc/AllocKind.h
+[tricolor]: https://en.wikipedia.org/wiki/Tracing_garbage_collection#Tri-color_marking
 
