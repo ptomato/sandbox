@@ -66,9 +66,8 @@ descriptive, like a Function name.
 ### Weak Maps
 
 The weak maps portion always starts with the string `# Weak maps.` and each line
-contains the metadata of a WeakMap. Generally these aren't of much interest to
-GJS users since SpiderMonkey can handle these just fine and they're pretty
-uncommon anyways.
+contains the metadata of a WeakMap. Generally these aren't of much interest and
+they're pretty uncommon anyways.
 
 ## Section Separator
 
