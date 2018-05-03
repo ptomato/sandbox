@@ -6,13 +6,17 @@ although it employs a number of strategies including generational collection
 others.
 
 This a brief overview of the structure of SpiderMonkey garbage collector heaps
-with some additional notes on GJS particulars. Heaps are first organized into
-two sections; the roots and the graph.
+with some additional notes on GJS particulars. This isn't an exhaustive article
+on garbage collection or SpiderMonkey internals, only a reasonably thorough
+description of what a heap file looks like and how that relates to JavaScript
+and GJS. There is a fairly thorough, and presumably up to date, description of
+how the SpiderMonkey garbage collector works in [gc/GC.cpp][gc-cpp].
 
-## Roots Section
+## The Roots Section
 
-The roots section contains a list of the top-level rooted objects and
-rooted objects and `WeakMap`'s (possibly also `WeakSet`'s).
+A garbage collector heap is divided into two parts, with the first being the
+roots section. Along with a list of the top-level rooted objects it also has a
+list of the [WeakMaps][weakmap]'s and [WeakSet][weakset]'s.
 
 ```
 # Roots.
@@ -41,23 +45,23 @@ gjs> new Gtk.Label();
 [object instance proxy GIName:Gtk.Label jsobj@0x7f8bbf685300 native@0x55ca3c97e3b0]
 ```
 
-The second part is the root **color**, which could in principle be black (`B`),
-gray (`G`) or white (`W`). This known as [Tri-color marking][tricolor], with
+The second part is the **color**, which could in principle be *black* (`B`),
+*gray* (`G`) or *white* (`W`). This known as [Tri-color marking][tricolor], with
 *black* being reachable and thus not collectable, *gray* yet to be scanned for
 references to collectable roots and *white* able to be collected.
 
 In practice all entries in the roots section will be *black*, and *gray* roots
 could only appear if you were to dump a heap during a garbage collection cycle
 between the *mark* and *sweep* phases. If you are dumping a heap using the
-`dumpHeap()` function from GJS's System module, you will never see *gray* roots
+`dumpHeap()` function from GJS's System module, you will never see a *gray* root
 since JavaScript execution is paused during a collection cycle. You may see them
 if you are dumping a heap by sending a `SIGUSR1` to a GJS process with the env
 variable `GJS_DEBUG_HEAP_OUTPUT` set, but they will still be very rare.
 
-The third part is the root **label**. Root labels are generally types of objects
-like `script`, `persistent-Object`, `env chain`, `fp argv[0]` and so on. Each
-**node** and **edge** will also have a label and are usually more descriptive,
-such as a Function name.
+The third part is the **label**. Root labels are generally types of objects like
+`script`, `persistent-Object`, `env chain`, `fp argv[0]` and so on. Each
+**node** and **edge** will also have a label, but will usually be something more
+descriptive, like a Function name.
 
 ### Weak Maps
 
@@ -66,18 +70,21 @@ contains the metadata of a WeakMap. Generally these aren't of much interest to
 GJS users since SpiderMonkey can handle these just fine and they're pretty
 uncommon anyways.
 
-### End of the Roots Section
+## Section Separator
 
 The end of the roots section (including the roots portion and weak maps portion)
-is always marked by the string `==========` (10 equals characters).
+and the beginning of the graph section is always separated by a string of ten
+equals characters (`==========`).
 
-## The Graph
+## The Graph Section
 
-The graph section of a heap contains the bulk of the data in a heap and is
-mostly comprised of a list of entries, each with a **node** followed by a list
-of its **edge** references. The graph is organized by lines describing how
-SpiderMonkey has organized the allocations internally including what **zone**,
-**compartment** and **arena** the **node** is allocated in.
+The second part of the heap contains the graph, which is the bulk of the data.
+The graph is mostly comprised of a list of entries, each with a **node**
+followed by a list of its **edge** references.
+
+The graph is further annotated with lines describing how SpiderMonkey has
+organized the allocations internally including what **zone**, **compartment**
+and **arena** the **node** is allocated in.
 
 ### Zones, Compartments, Arenas and Cells
 
@@ -95,30 +102,26 @@ the heap and for the garbage collector to operate in. In other words, a garbage
 collection cycle can't cross a **zone** and neither will a **compartment**, an
 **arena** or a **cell**.
 
-A **compartment** contains arenas and can function as security boundary,
-although there are some facilities in the SpiderMonkey API to allow objects to
-cross compartent boundaries. They may also allow compartment specific garbage
-collection, but it's unclear from the scattered documention the *current* place
-of compartments in how the garbage collector operates.
+A **compartment** contains can function as security boundary, although there are
+some facilities in the SpiderMonkey API to allow objects to cross compartent
+boundaries.
 
-An **arena** is an internal unit of memory allocation (4096 bytes) and only
-contains objects of the same size and kind as defined by the `allockind` field.
+An **arena** is an internal unit of memory allocation (4096 bytes) and will only
+contain objects of the same size and kind as indicated by the `allockind` field.
 The `size` field seems to be present to make processing easier, as the type and
-size are linked and both defined in [AllocKind.h](allockind).
+size are linked and both defined in [AllocKind.h][allockind-h].
 
-A **cell** is the unit of memory that is allocated and collected by the GC, and
-is the base class for all classes such as JSObject.
+A **cell** is the unit of memory that is allocated and collected by the garbage
+collector, and is the base class for all object classes (such as JSObject). Each
+**node** entry represents an object that is a type of **cell** (an `allockind`).
 
 ### Nodes & Edges
 
-A **node** represents an object (such as Arrays, Functions and string) and an
-**edge** represents a reference held between those objects. Each **node** is a
-type of **cell** (an `allockind`) that can only be allocated in an **arena**
-specified to hold that type of `allockind`, however a **node** can be in more
-than one **arena**.
-
-Some **node** types contain actual data, like strings or numbers, but usually
-they're ad
+While a **node** represents an object (such as an Array, Function or GObject),
+each **edge** entry represents a reference the **node** holds to another object,
+thus rooting it. If the object a **node** represent were collected and it was
+the only reference holder to an object in it's **edge** list, that object would
+then be marked *white* (collectable) during the next collection cycle.
 
 ```
 0x7f028449eca0 B GObject_Object 0x556629ed55f0
@@ -134,32 +137,35 @@ they're ad
 > 0x7f02840a5610 B query_info
 ```
 
-The first line in the snippet above is the node, which in this case is an
-instance of a `Gio.File`. Like a **root** entry, a **node** entry has three
-parts; an address, a color and a label. Unfortunately, the GType is not part of
-the label but the **native address** is making it possible to inspect via `gdb`:
+The first line in the snippet above is the **node**, which in this case is an
+instance of a `Gio.File`. Like a **root** entry, it's made of three parts; a
+**jsobj address**, a **color** and a **label**. Unfortunately, the GType name is
+not part of the label but the **native address** is making it possible to
+inspect via `gdb`:
 
 ```sh
 (gdb) call g_type_name(((ObjectInstance*)0x556629ed55f0)->gtype)
 $1 = (const gchar *) 0x7ff7850bed68 "GLocalFile"
 ```
 
-Following the **node** entry are the edges for this node. Again, each has three
-parts; the address of the object the **edge** forms a reference with, the color
-and the label. If you're familiar with the Gnome API you have probably discerned
-that this is a `Gio.File` object. If we were to trace the address of, for
-example, `> 0x7f0284094be0 B get_child` we would find it points to a `Function`
-**node** (not the child itself) elsewhere in the same **compartment**.
+Following the **node** entry is the **edge** list for this node. Again, each has
+three parts; the **jsobj address** of the object the **node** holds a reference
+to, the **color** and the **label**. If we were to trace the address of the
+line `> 0x7f0284094be0 B get_child`, for example, we would find it points to a
+Function **node** elsewhere in the same **compartment**.
 
-## References
+## Further Reading
 
-* [MDN: *GC and CC logs*](https://developer.mozilla.org/docs/Mozilla/Performance/GC_and_CC_logs)
 * [MDN: *Garbage collection*](https://developer.mozilla.org/docs/Mozilla/Projects/SpiderMonkey/Internals/Garbage_collection)
+* [MDN: *GC and CC logs*](https://developer.mozilla.org/docs/Mozilla/Performance/GC_and_CC_logs)
 * [MDN: *Memory Management*](https://developer.mozilla.org/docs/Web/JavaScript/Memory_Management)
 * [Mozilla JavaScript Blog: *Incremental GC in Firefox 16!*](https://blog.mozilla.org/javascript/2012/08/28/incremental-gc-in-firefox-16/)
 * [Mozilla Hacks: *Generational Garbage Collection in Firefox*](https://hacks.mozilla.org/2014/09/generational-garbage-collection-in-firefox/)
 * [Mozilla Hack: *Compacting Garbage Collection in SpiderMonkey*](https://hacks.mozilla.org/2015/07/compacting-garbage-collection-in-spidermonkey/)
 
-[allockind]: https://dxr.mozilla.org/mozilla-central/source/js/src/gc/AllocKind.h
+[allockind-h]: https://dxr.mozilla.org/mozilla-central/source/js/src/gc/AllocKind.h
+[gc-cpp]: https://dxr.mozilla.org/mozilla-central/source/js/src/gc/GC.cpp
 [tricolor]: https://en.wikipedia.org/wiki/Tracing_garbage_collection#Tri-color_marking
+[weakmap]: https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/WeakMap
+[weakset]: https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/WeakSet
 
