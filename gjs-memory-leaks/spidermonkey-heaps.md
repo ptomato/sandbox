@@ -3,7 +3,7 @@
 Generally speaking, SpiderMonkey implements a mark-and-sweep garbage collector,
 although it employs a number of strategies including generational collection
 (with nursery and tenured regions), incremental collection, arena compacting and
-others. This is a test pull request.
+others.
 
 This a brief overview of the structure of SpiderMonkey garbage collector heaps
 with some additional notes on GJS particulars. This isn't an exhaustive article
