@@ -1,17 +1,17 @@
 # Async, Promises & Threads in GJS
 
 
-While JavaScript engines use threading behind the scenes, JavaScript programs use a single-threaded event loop. This means that a long, synchronous operation can block the event loop from proceeding until it is completed. This is especially noticeable in applications that involve user input/output and in the case of a Gnome Shell extension can lock up the whole desktop.
+While JavaScript engines use threading behind the scenes, JavaScript programs use a single-threaded event loop. This means that a long, synchronous operation can block the event loop from proceeding until it is completed. This can cause noticeable hangs in applications that involve user input and in the case of a Gnome Shell extension could even lock up the whole desktop.
 
-Since GJS is JavaScript bindings for the Gnome API we have tools not available in standard JavaScript that we can leverage like [GTask][gtask], but we also lack some tools like [Web Workers][mdn-webworkers].
+Since GJS is JavaScript bindings for the Gnome API we have tools not available in standard JavaScript that we can leverage like [GTask][gtask], but we also lack some tools like [Web Workers][mdn-webworkers]. We'll do an overview of many of the facilities available to GJS that allow us to 
 
 ## Table of Contents
 
 1. [Basic Usage](#basic-usage)
 2. [GTask API](#gtask-api)
-2. [Spawning Processes](#spawning-processes)
-2. [Event Loop and Sources](#basic-usage)
-2. [Signals](#signals)
+3. [Spawning Processes](#spawning-processes)
+4. [Event Loop and Sources](#basic-usage)
+5. [Signals](#signals)
 
 
 ## Basic Usage
@@ -43,10 +43,12 @@ function myPromiseFunc() {
 }
 
 // This is a simple async function we'll use to invoke a few myPromiseFunc()'s
-// in a loop. async functions always return a Promise object, implicitly.
 async function myAsyncFunction(name) {
     try {
         for (let i = 0; i < 2; i++) {
+            // `await` is similar to `yield` in generators and can only be used
+            // in an async function
+            //
             // By using `await` to resolve myPromiseFunc() before scheduling the
             // next we allow other operations to be scheduled in between
             await myPromiseFunc();
@@ -57,7 +59,7 @@ async function myAsyncFunction(name) {
     }
 }
 
-// Invoke two of our function
+// We'll invoke two named runs of myAsyncFunction() to see how scheduling works
 myAsyncFunction('test1');
 
 // async functions implicitly return a Promise so we can attach a then() clause
@@ -89,15 +91,13 @@ sys	0m0.007s
 
 Notice the script takes 4 seconds since once a Promise has started executing it is still synchronous. Also pay attention to how `log('started');` is scheduled *before* the first invocation of `myPromiseFunc()` due to the use of `await`.
 
-Basic Promise behaviour and scheduling is important to understand to truly leverage asynchronous code in GJS, so you should revisit Mozilla's guide to [Using Promises][mdn-promises] and [async functions][mdn-async] if anything seems confusing.
+Basic Promise behaviour and scheduling is important to truly leverage asynchronous code in GJS, so you should revisit Mozilla's guide to [Using Promises][mdn-promises] and [async functions][mdn-async] if anything seems confusing.
 
 ## GTask API
 
-[GTask][gtask] is a Gnome API commonly used to implement asynchronous functions that often run in dedicated threads, can be prioritized in GLib's loop and cancelled. 
+[GTask][gtask] is a Gnome API commonly used to implement asynchronous functions that often run in dedicated threads, can be prioritized in GLib's loop and cancelled. Using async/await you can regain synchronous behaviour, so you can almost always use Gnome API async functions in place of their synchronous versions!
 
-Keep in mind that using async/await you can regain synchronous behaviour, so there are very few situations where you can't use GTask async functions to replace their synchronous versions!
-
-Since GTask functions use a familiar `foo_async(callback)` pattern, it's really quite simple to wrap one in a Promise and use it in an async function. Let's start with a common task of reading the contents of a file.
+Since GTask functions use a familiar `foo_async(callback)` pattern, it's quite simple to wrap them in a Promise and use it in an async function. Let's start with a common task of reading the contents of a file.
 
 ```js
 const Gio = imports.gi.Gio;
@@ -106,15 +106,15 @@ const GLib = imports.gi.GLib;
 let loop = GLib.MainLoop.new(null, false);
 
 function loadContents(file, cancellable=null) {
-    // We use an explicit Promise, instead of an async function, because we need
-    // resolve() & reject() to break out of the AsyncResult callback...
+    // We use an explicit Promise instead of an async function, because we need
+    // resolve() & reject() to break out of the GAsyncReadyCallback...
     return new Promise((resolve, reject) => {
         file.load_contents_async(cancellable, (source_object, res) => {
             // ...and a try-catch to propagate errors through the Promise chain
             try {
                 res = source_object.load_contents_finish(res);
                 
-                // AsyncResult functions return an 'ok' boolean, but we ignore
+                // GAsyncReadyCallbacks return an 'ok' boolean, but we ignore
                 // them since an error will be thrown anyways if it's %false
                 let [ok, contents, etag_out] = res;
                 
@@ -126,8 +126,8 @@ function loadContents(file, cancellable=null) {
     });
 }
 
-// We'll use loadContents() in an async function, but you could also use 'await'
-// in place of 'return' and include the Promise in this function
+// We'll use loadContents() in an async function, but you could also use `await`
+// in place of `return` and include the Promise in this function
 async function loadFile(path, cancellable=null) {
     try {
         let file = Gio.File.new_for_path(path);
@@ -149,20 +149,22 @@ loadFile('/proc/cpuinfo', cancellable).then(contents => {
 });
 
 // To cancel the operation we invoke cancel() on the cancellable object, which
-// will throw the "Gio.IOErrorEnum: Operation was cancelled" in loadContents()
+// will throw "Gio.IOErrorEnum: Operation was cancelled" in loadContents()
 cancellable.cancel();
 
 loop.run();
 ```
 
-Using async functions you can leverage try-catch-finally in combination with `then()` and `catch()` to construct flexible error handling routines to suit your use-case. As of GJS-1.54 `finally()` is also available for Promises.
+Using async functions you can leverage try-catch-finally in combination with `then()` and `catch()` for flexible error handling to suit your use-case. As of GJS-1.54 `finally()` is also available for Promises.
 
-So let's remove the cancellable and re-use `loadContents()` and `loadFile()` to test how threaded Promises play out. If you don't have suitable files handy, you can create an empty 10MB and 10KB file to compare:
+Now let's remove the cancellable and re-use `loadContents()` and `loadFile()` to test how threaded Promises play out. If you don't have suitable files handy, you can create an empty 10MB and 10KB file to compare:
 
 ```sh
 $ dd if=/dev/zero of=10mb.txt count=10240 bs=1024
 $ dd if=/dev/zero of=10kb.txt count=10 bs=1024
 ```
+
+Then put the following snippet in place of the calls to `cancel()` and `loadFile()`:
 
 ```js
 let start = Date.now();
@@ -184,7 +186,7 @@ Gjs-Message: 18:41:55.122: JS LOG: 10kb finished, 2ms elapsed
 Gjs-Message: 18:41:55.149: JS LOG: 10mb finished, 36ms elapsed
 ```
 
-Longer operations still take longer, but they don't block shorter operations. In fact, because `loadFile()` is a Promise and we didn't using `await`, the two operations are essentially running in parallel. Try switching the order of the functions or reading the 10mb file twice:
+The longer operation doesn't block the shorter operation anymore and they finish in the expected order. In fact, because `loadFile()` is a Promise and we didn't using `await`, the two operations are essentially running in parallel. Try switching the order of the functions or reading the 10mb file twice:
 
 ```sh
 $ gjs async-file.js 
@@ -208,7 +210,7 @@ let [ok, pid, stdin, stdout, stderr] = GLib.spawn_async_with_pipes(
 );
 ```
 
-Let's do a simple exercise of using `Gio.Subprocess` to execute `ls -a` in the current directory then log the output manually.
+Let's try a simple exercise of using `Gio.Subprocess` to execute `ls -a` in the current directory then log the output manually.
 
 ```js
 const Gio = imports.gi.Gio;
@@ -353,7 +355,6 @@ But also says:
 
 > [Return] TRUE to stop other handlers from being called
 
-
 ```js
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
@@ -374,7 +375,7 @@ service.connect('incoming', async (service, connection, source_object) => {
 loop.run();
 ```
 
-On the topic of GSignals and performance, it's worth noting that a global lock is acquired for [signal handlers lookup][gsignal-lock]. If you are subclassing a GObject it can be more performant to override the default handler using vfuncs, especially with signals like `GtkWidget::draw` which can be called frequently:
+On the topic of GSignals and performance, it's worth noting that a global lock is acquired for [signal handler lookup][gsignal-lock]. If you are subclassing a GObject it can be more performant to override the default handler using vfuncs, especially with signals like `GtkWidget::draw` which can be called frequently:
 
 ```js
 var MyWidget = GObject.registerClass({
