@@ -122,6 +122,17 @@ function myPromiseFunc(name) {
     return new Promise((resolve, reject) => {
         GLib.usleep(1000000);
         
+        // I get why you picked usleep() as the example function to execute in
+        // the Promise, but I have mixed feelings about whether it's a good example
+        // since it blocks.
+        // Normally you would not want to block the main loop, even in an
+        // asynchronously invoked function.
+        // The async I/O operations in GIO all execute in a separate thread
+        // (although that's hidden from the caller.)
+        // On the other hand, writing a "wait 1 second" function that doesn't block,
+        // and returns a Promise, using GLib.timeout_add_seconds(), is going to look
+        // like a confusing mess at first glance.
+
         // Return @name as the result
         resolve(name);
     });
@@ -146,6 +157,9 @@ async function myAsyncFunction(name) {
         logError(e);
     } finally {
         return 'finished';
+        // it can be considered bad style to return inside a finally block,
+        // because it will cause any returns in the try or catch blocks to
+        // simply be ignored, which is confusing.
     }
 }
 
@@ -185,11 +199,16 @@ Notice that the script takes ~4 seconds since once a Promise has started executi
 
 Also pay attention to how `log('started');` is executed *before* the first invocation of `myPromiseFunc()` due to the use of `await`. Although there is no threading happening here, the principle of thread-safety still applies to the execution order of operations in the event loop.
 
+> What do you mean in this case by the principle of thread-safety?
+
 ## GTask API
 
 [GTask][gtask] is an API commonly used by Gnome libraries to implement asynchronous functions that can be run in dedicated threads, prioritized in the event loop and cancelled mid-operation.
 
-**WARNING:** Unlike the Promise API, GTask async functions use **real threads**. This means that the practice of thread-safety applies and care must be taken not to operate on objects or memory being used during execution. 
+**WARNING:** Unlike the Promise API, GTask async functions use **real threads**. This means that the practice of thread-safety applies and care must be taken not to operate on objects or memory being used during execution.
+
+> I'm not sure the warning really applies. Since no JS code can ever be executed in another thread, the threading all happens
+> behind the scenes, and nothing you can access from JS is ever touched by the GTask thread.
 
 Generally, these functions follow a pattern of:
 
@@ -207,6 +226,9 @@ SourceObj.foo_async(
 
 
 We'll use the common task of reading the contents of a file as an example of wrapping a GTask async function:
+
+> I think now the promisify stuff is merged, you could change the below example to use it, with a note that it works in
+> 1.54 (GNOME 3.30) and above, and the API is experimental until we finalize it in 1.56 (GNOME 3.32).
 
 ```js
 const Gio = imports.gi.Gio;
@@ -312,6 +334,8 @@ Gjs-Message: 18:50:04.043: JS LOG: 10mb finished, 40ms elapsed
 
 Consider the following snippet using `GLib.spawn_async_with_pipes()`. In other languages we would pass "in" `null` as a function argument for pipes like `stdin` that we don't plan on using, preventing them from being opened. In GJS all three pipes are opened implicitly and must be explicitly closed, or we may eventually get a *"Too many open files"* error.
 
+> Oh, I never realized this! That's bad.
+
 ```js
 let [ok, pid, stdin, stdout, stderr] = GLib.spawn_async_with_pipes(
     null,                   // working directory
@@ -395,6 +419,18 @@ Gjs-Message: 16:57:26.784: JS LOG:
 GSignals are used quite a bit in Gnome, but what does that have to do with async functions and Promises? Since async functions *immediately* return a Promise object they can be used as callbacks for signals that would normally block until the callback finished its operation.
 
 Although many signals have `void` or irrelevant return values, some like `GtkWidget::delete-event` are propagated to other objects depending on the return value (usually boolean). As with event source callbacks, keep in mind that a Promise returned by a signal callback will be coerced to `true`.
+
+> I think it would be better to state more explicitly not to use async callbacks for signals that have return values.
+> If you do want to fire and forget an async operation inside a signal handler, you can always use a normal function
+> as the handler that only calls the async function, e.g. (untested):
+
+```js
+service.connect('incoming', () => {
+    (async (service, connection, source_object) => {
+       ...
+    })(...arguments)
+});
+```
 
 Take for example `Gio.SocketService::incoming` whose documentation says:
 
